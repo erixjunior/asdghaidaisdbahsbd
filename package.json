@@ -1,0 +1,23 @@
+{
+  "name": "facebook-scraper",
+  "version": "1.0.0",
+  "description": "Facebook scraper menggunakan Playwright untuk login dan scraping status",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "advanced": "node run-advanced.js",
+    "cdp": "node run-cdp.js",
+    "test": "playwright test",
+    "install-browsers": "playwright install"
+  },
+  "keywords": ["facebook", "scraper", "playwright", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0"
+  }
+}
