@@ -15,7 +15,7 @@ class CDPFacebookScraper {
         this.isLoggedIn = false;
         this.posts = [];
         this.cleanedPosts = [];
-        
+
         // Clean parsing patterns
         this.initCleaningPatterns();
     }
@@ -32,31 +32,31 @@ class CDPFacebookScraper {
             /^(What's on your mind\?|Photo|Video|Live)$/i,
             /^(Home|Search|Notifications|Menu|Profile)$/i,
             /^(News Feed|Stories|Groups|Pages|Events)$/i,
-            
+
             // Navigation and interaction elements
             /^(󰍸|󰍹|󰍺|󰞋)/,  // Facebook reaction icons
             /^[\u{1F300}-\u{1F6FF}]+$/u,  // Emoji-only content
             /^\d+$/, // Numbers only (like counts)
             /^\d+[KM]$/, // Like counts (1K, 2M, etc)
             /^(󱘋|🎥|📷|📸|🎵)/, // Media icons
-            
+
             // Time stamps and metadata
             /^\d+[hmdHMD]$/, // 1h, 2d, 3m ago
             /^(Just now|Yesterday|Today)$/i,
             /^(Sponsored|Promoted|Advertisement)$/i,
             /^(Privacy|Public|Friends|Custom)$/i,
-            
+
             // Translation metadata
             /^Translated from \w+$/i,
             /^See translation$/i,
             /^Original text$/i,
-            
+
             // Generic short noise
             /^[\.]{3,}$/, // Three dots or more
             /^[…]+$/, // Ellipsis
             /^[\s\n\r]*$/, // Whitespace only
         ];
-        
+
         // Patterns untuk identifying real post content
         this.postContentPatterns = [
             // Text that looks like real posts (longer than 20 chars, contains meaningful words)
@@ -821,7 +821,7 @@ class CDPFacebookScraper {
             // Tunggu content baru dimuat dengan random delay
             const delay =
                 Math.floor(Math.random() * 1000) +
-                    parseInt(process.env.SCRAPE_DELAY_MS) || 2000;
+                parseInt(process.env.SCRAPE_DELAY_MS) || 2000;
             await this.page.waitForTimeout(delay);
 
             // Hitung jumlah post yang sudah dimuat (berdasarkan struktur m.facebook.com)
@@ -858,59 +858,65 @@ class CDPFacebookScraper {
     async extractPostsAdvanced() {
         try {
             // Filter elemen berdasarkan container yang memiliki div[role="button"] sebagai child
-            const containerElements = await this.page.$$('[data-mcomponent="MContainer"]:has(> div[role="button"])');
+            const containerElements = await this.page.$$('[data-mcomponent="MContainer"]');
             console.log(`🔍 Found ${containerElements.length} valid post containers with role="button"`);
-            
+
             let posts = [];
             const processedContainers = new Set();
-            
+
             for (let i = 0; i < containerElements.length; i++) {
                 const container = containerElements[i];
-                
+
                 try {
                     // Get container identifier untuk avoid duplicate processing
                     const containerId = await container.getAttribute('id') || `container_${i}`;
                     if (processedContainers.has(containerId)) continue;
-                    
+
                     processedContainers.add(containerId);
-                    
+
                     // Extract post data from this specific container
                     const postData = await container.evaluate((containerEl, index) => {
                         // Pastikan ini adalah container yang valid (memiliki div[role="button"] sebagai child)
-                        const roleButtonChild = containerEl.querySelector('> div[role="button"]');
-                        if (!roleButtonChild) return null;
-                        
+                        // const roleButtonChild = containerEl.querySelector(':scope > div[role="button"]');
+                        // if (!roleButtonChild) return null;
+
                         // Look for text content in this container only - ambil yang pertama saja
                         const textAreas = containerEl.querySelectorAll('[data-mcomponent="TextArea"]');
-                        
+
                         if (textAreas.length === 0) return null;
-                        
+
                         // Ambil TextArea pertama yang mengandung span.f1 dengan content yang valid
                         let text = '';
                         let validTextArea = null;
-                        
+
                         for (const textArea of textAreas) {
                             const spanF1 = textArea.querySelector('span.f1');
                             if (spanF1) {
                                 const candidateText = spanF1.textContent?.trim();
-                                // Skip jika ini adalah text terjemahan atau metadata
-                                if (candidateText && 
-                                    candidateText.length > 10 && 
+                                // Skip jika ini adalah text terjemahan, metadata, atau like info
+                                if (candidateText &&
+                                    candidateText.length > 15 && // Minimum length untuk post content
                                     !candidateText.includes('Translated from') &&
                                     !candidateText.includes('See translation') &&
                                     !candidateText.includes('Original text') &&
+                                    !candidateText.includes(' and ') && // Skip "X and Y others" 
+                                    !candidateText.includes(' others') && // Skip like counts
+                                    !candidateText.includes(' mutual friends') && // Skip friend suggestions
+                                    !candidateText.includes(' reacted to this') && // Skip reaction info
                                     !candidateText.match(/^\d+[hmdHMD](\s+(ago|lalu))?$/i) && // Skip timestamp like "2h ago"
-                                    !candidateText.match(/^(Like|Comment|Share|Follow|More)$/i)) {
-                                    
+                                    !candidateText.match(/^(Like|Comment|Share|Follow|More|See All)$/i) &&
+                                    !candidateText.match(/^\w+\s+\w+\s+and\s+\d+\s+others?$/i) && // Skip "Name Name and X others"
+                                    !candidateText.match(/^\d+\s*(like|comment|share)s?$/i)) { // Skip "5 likes", "3 comments"
+
                                     text = candidateText;
                                     validTextArea = textArea;
                                     break; // Ambil yang pertama yang valid, skip yang lainnya
                                 }
                             }
                         }
-                        
+
                         if (!text || !validTextArea) return null;
-                        
+
                         // Find author in this container
                         let author = '';
                         const authorElements = containerEl.querySelectorAll('span.f2.a, h3 a, h4 a');
@@ -921,16 +927,16 @@ class CDPFacebookScraper {
                                 break;
                             }
                         }
-                        
+
                         // Find timestamp
                         let timestamp = '';
                         const timeElement = containerEl.querySelector('time, abbr');
                         if (timeElement) {
-                            timestamp = timeElement.getAttribute('datetime') || 
-                                       timeElement.getAttribute('title') || 
-                                       timeElement.textContent || '';
+                            timestamp = timeElement.getAttribute('datetime') ||
+                                timeElement.getAttribute('title') ||
+                                timeElement.textContent || '';
                         }
-                        
+
                         return {
                             id: `container_post_${index}`,
                             text: text,
@@ -940,20 +946,20 @@ class CDPFacebookScraper {
                             selector: 'MContainer[role-button-child]'
                         };
                     }, i);
-                    
+
                     if (postData && postData.text) {
                         posts.push(postData);
                         console.log(`📝 Extracted from valid container ${i}: "${postData.text.substring(0, 50)}..." (Author: ${postData.author || 'N/A'})`);
                     }
-                    
+
                 } catch (error) {
                     console.log(`⚠️ Error processing container ${i}:`, error.message);
                 }
             }
-            
+
             console.log(`✅ Extracted ${posts.length} posts from ${containerElements.length} valid containers`);
             return posts;
-            
+
         } catch (error) {
             console.error("❌ Error saat extract posts:", error.message);
             return [];
@@ -963,44 +969,44 @@ class CDPFacebookScraper {
     // Clean parsing methods
     isNoiseContent(text) {
         if (!text || typeof text !== 'string') return true;
-        
+
         const cleanText = text.trim();
-        
+
         // Check length - too short is likely noise
         if (cleanText.length < 10) return true;
-        
+
         // Check against noise patterns
         for (const pattern of this.noisePatterns) {
             if (pattern.test(cleanText)) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
     isRealPostContent(text) {
         if (!text || typeof text !== 'string') return false;
-        
+
         const cleanText = text.trim();
-        
+
         // Must be at least 15 characters
         if (cleanText.length < 15) return false;
-        
+
         // Check if it contains meaningful content patterns
         for (const pattern of this.postContentPatterns) {
             if (pattern.test(cleanText)) {
                 return true;
             }
         }
-        
+
         // If no pattern matches, it's not real content
         return false;
     }
 
     cleanText(text) {
         if (!text) return '';
-        
+
         return text
             .trim()
             .replace(/\s+/g, ' ') // Normalize whitespace
@@ -1011,18 +1017,18 @@ class CDPFacebookScraper {
 
     calculateConfidence(text) {
         let confidence = 0;
-        
+
         // Length bonus
         if (text.length > 50) confidence += 0.3;
         if (text.length > 100) confidence += 0.2;
-        
+
         // Sentence structure bonus
         if (text.includes('.') || text.includes('!') || text.includes('?')) confidence += 0.2;
-        
+
         // Multiple sentences bonus
         const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 5);
         if (sentences.length > 1) confidence += 0.2;
-        
+
         // Pattern matching bonus
         for (const pattern of this.postContentPatterns) {
             if (pattern.test(text)) {
@@ -1030,52 +1036,52 @@ class CDPFacebookScraper {
                 break; // Only add bonus once
             }
         }
-        
+
         return Math.min(confidence, 1.0); // Cap at 1.0
     }
 
     async extractPostsWithAdvancedCleaning() {
         try {
             console.log('🧹 Starting advanced post extraction with cleaning...');
-            
+
             const rawPosts = await this.extractPostsAdvanced();
             console.log(`📝 Extracted ${rawPosts.length} raw posts`);
-            
+
             if (rawPosts.length === 0) {
                 console.log('⚠️  No raw posts found');
                 return [];
             }
-            
+
             // Clean posts with advanced filtering
             const cleanedPosts = [];
             const duplicateTracker = new Set();
-            
+
             for (let i = 0; i < rawPosts.length; i++) {
                 const post = rawPosts[i];
                 const originalText = post.text || '';
-                
+
                 // Skip if it's noise content
                 if (this.isNoiseContent(originalText)) {
                     console.log(`⏭️  Skipped noise: "${originalText.substring(0, 50)}..."`);
                     continue;
                 }
-                
+
                 // Check if it's real post content
                 if (!this.isRealPostContent(originalText)) {
                     console.log(`⏭️  Skipped non-content: "${originalText.substring(0, 50)}..."`);
                     continue;
                 }
-                
+
                 // Clean the text
                 const cleanText = this.cleanText(originalText);
-                
+
                 // Simple duplicate detection based on clean text
                 if (duplicateTracker.has(cleanText.toLowerCase())) {
                     console.log(`⏭️  Skipped duplicate: "${cleanText.substring(0, 50)}..."`);
                     continue;
                 }
                 duplicateTracker.add(cleanText.toLowerCase());
-                
+
                 // Enhanced author extraction using current page context
                 let enhancedAuthor = post.author || '';
                 if (!enhancedAuthor || enhancedAuthor.length < 2) {
@@ -1085,23 +1091,23 @@ class CDPFacebookScraper {
                         console.log(`⚠️  Could not enhance author for post: ${error.message}`);
                     }
                 }
-                
+
                 // Skip post if no author found
                 if (!enhancedAuthor || enhancedAuthor.trim().length === 0) {
                     console.log(`⏭️  Skipped no author: "${cleanText.substring(0, 50)}..."`);
                     continue;
                 }
-                
+
                 // Filter out unwanted selectors from being saved
                 let cleanSelector = post.selector || '';
                 const unwantedSelectors = [
                     'div[data-mcomponent="MContainer"] [data-mcomponent="TextArea"] div[dir="auto"]'
                 ];
-                
+
                 if (unwantedSelectors.some(selector => cleanSelector.includes(selector))) {
                     cleanSelector = ''; // Don't save unwanted selectors
                 }
-                
+
                 // Create cleaned post object
                 const cleanedPost = {
                     id: `clean_post_${cleanedPosts.length + 1}`,
@@ -1114,16 +1120,16 @@ class CDPFacebookScraper {
                     confidence: this.calculateConfidence(cleanText),
                     originalIndex: i
                 };
-                
+
                 cleanedPosts.push(cleanedPost);
                 console.log(`✅ Added clean post ${cleanedPosts.length}: "${cleanText.substring(0, 60)}..." (Author: ${enhancedAuthor || 'N/A'}) [Confidence: ${cleanedPost.confidence.toFixed(2)}]`);
             }
-            
+
             this.cleanedPosts = cleanedPosts;
             console.log(`\n🎉 Advanced cleaning complete! Found ${cleanedPosts.length} clean posts out of ${rawPosts.length} raw posts.`);
-            
+
             return cleanedPosts;
-            
+
         } catch (error) {
             console.error('❌ Error in advanced post extraction:', error.message);
             return [];
@@ -1135,32 +1141,32 @@ class CDPFacebookScraper {
             // Try to find author context for specific post text
             const authorInfo = await this.page.evaluate((searchText) => {
                 // Search for elements containing the post text
-                const textElements = Array.from(document.querySelectorAll('span.f1')).filter(el => 
+                const textElements = Array.from(document.querySelectorAll('span.f1')).filter(el =>
                     el.textContent && el.textContent.trim() === searchText
                 );
-                
+
                 for (const textEl of textElements) {
                     let container = textEl.closest('[data-mcomponent="MContainer"]') || textEl.closest('.m');
-                    
+
                     // Search up the DOM tree for author
                     for (let i = 0; i < 5; i++) {
                         if (!container) break;
-                        
+
                         const authorEl = container.querySelector('span.f2.a[role="link"][data-focusable="true"]')
                         // <span class="f2 a" data-action-id="32577" tabindex="0" role="link" data-focusable="true">Fansleslar</span>
                         if (authorEl) {
                             return authorEl.textContent?.trim();
                         }
-                        
+
                         container = container.parentElement;
                     }
                 }
-                
+
                 return '';
             }, postText.substring(0, 100)); // Limit search text for performance
-            
+
             return authorInfo || '';
-            
+
         } catch (error) {
             console.log(`⚠️  Error extracting author for post: ${error.message}`);
             return '';
@@ -1171,7 +1177,7 @@ class CDPFacebookScraper {
         try {
             // Calculate stats for cleaned posts
             const stats = this.calculateCleaningStats(posts);
-            
+
             const data = {
                 scrapedAt: new Date().toISOString(),
                 totalPosts: posts.length,
@@ -1188,7 +1194,7 @@ class CDPFacebookScraper {
 
             // Juga buat file CSV untuk analisis
             await this.saveToCSV(posts, filename.replace(".json", ".csv"));
-            
+
             // Save cleaning report
             await this.saveCleaningReport(stats, filename.replace(".json", "_report.json"));
         } catch (error) {
@@ -1198,13 +1204,13 @@ class CDPFacebookScraper {
 
     calculateCleaningStats(cleanedPosts) {
         const totalCleaned = cleanedPosts.length;
-        
+
         const qualityDistribution = {
             highConfidence: cleanedPosts.filter(p => p.confidence >= 0.8).length,
             mediumConfidence: cleanedPosts.filter(p => p.confidence >= 0.5 && p.confidence < 0.8).length,
             lowConfidence: cleanedPosts.filter(p => p.confidence < 0.5).length
         };
-        
+
         const topPosts = cleanedPosts
             .sort((a, b) => b.confidence - a.confidence)
             .slice(0, 10)
@@ -1215,7 +1221,7 @@ class CDPFacebookScraper {
                 author: post.author,
                 timestamp: post.timestamp
             }));
-        
+
         return {
             summary: {
                 cleanedPosts: totalCleaned,
@@ -1231,19 +1237,19 @@ class CDPFacebookScraper {
     calculateAuthorStats(posts) {
         const authorCounts = {};
         let postsWithAuthor = 0;
-        
+
         posts.forEach(post => {
             if (post.author && post.author.trim().length > 0) {
                 postsWithAuthor++;
                 authorCounts[post.author] = (authorCounts[post.author] || 0) + 1;
             }
         });
-        
+
         const topAuthors = Object.entries(authorCounts)
-            .sort(([,a], [,b]) => b - a)
+            .sort(([, a], [, b]) => b - a)
             .slice(0, 10)
             .map(([author, count]) => ({ author, postCount: count }));
-        
+
         return {
             totalAuthors: Object.keys(authorCounts).length,
             postsWithAuthor: postsWithAuthor,
@@ -1306,8 +1312,7 @@ class CDPFacebookScraper {
             }, shouldShow);
 
             console.log(
-                `${shouldShow ? "✅" : "❌"} Dimensions bar ${
-                    shouldShow ? "ditampilkan" : "disembunyikan"
+                `${shouldShow ? "✅" : "❌"} Dimensions bar ${shouldShow ? "ditampilkan" : "disembunyikan"
                 }`
             );
             return shouldShow;
